@@ -9,11 +9,18 @@ import random
 
 
 class GithubSpider:
+    # Create token
+    token = 'Bearer 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'
     headers_xml = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.113 Safari/537.36',
-               'x-requested-with': 'XMLHttpRequest', 'authority': 'github.com' }
-    headers_common = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.113 Safari/537.36'}
+               'x-requested-with': 'XMLHttpRequest', 'authority': 'github.com', 'Authorization': token }
+    headers_common = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.113 Safari/537.36',
+            'Authorization': token}
 
     def __init__(self):
+        remain = self.check_limit()
+        if remain <= 0:
+            print('Limit reached! Please try another github account or wait for at most 1 hour.')
+            sys.exit(1)
         self.company_ls = []
 
     def get_data_from_url(self, url, headers):
@@ -28,20 +35,8 @@ class GithubSpider:
             return {'people': data['members']['totalCount'],
                     'repositories': data['repositories']['totalCount'],
                     'projects': data['projects']['totalCount']}
-        except json.JSONDecodeError:
-            print('Not found! Please check the company name!')
-            sys.exit(-1)
-
-    def is_company_exists(self, company):
-        """
-        Check whether the given company exists
-        """
-        org_url = 'https://api.github.com/orgs/{}'.format(company)
-        json_str = self.get_data_from_url(org_url, self.headers_common)
-        data = json.loads(json_str)
-        if 'type' not in data:
-            return False
-        return True
+        except (json.JSONDecodeError, KeyError) as e:
+            return None
 
     def fetch_repos(self, company, nums):
         per_page = 100
@@ -60,15 +55,18 @@ class GithubSpider:
             all_data += data
             print('Get repo count:', len(all_data), 'from url:', repo_url)
 
-            time.sleep(random.random())
-
         # sort by the star count descendingly
         all_data.sort(key=lambda x: x['stargazers_count'], reverse=True)
 
+        h_index = 0
         # show the repos as table
-        for row in all_data:
+        for idx, row in enumerate(all_data):
+            if int(row['stargazers_count']) < idx + 1:
+                h_index = idx
+                break
             t.add_row([row[key] for key in keys])
 
+        print(company, 'h-index:', h_index)
         print(t)
 
     def display_companies(self):
@@ -78,14 +76,21 @@ class GithubSpider:
             t.add_row(row)
         print(t)
 
+    def check_limit(self):
+        url = 'https://api.github.com/rate_limit'
+        json_str = self.get_data_from_url(url, self.headers_common)
+        remaining = json.loads(json_str)['resources']['core']['remaining']
+        print('Github api limit for this hour is:', remaining)
+        return int(remaining)
+
     def run(self, company):
-        if not self.is_company_exists(company):
-            print('{} not exists! Please check the company name!'.format(company))
-            return
         url = 'https://github.com/users/{}/tab_counts?repo=1&project=1&member=1'.format(company)
 
         json_str = self.get_data_from_url(url, self.headers_xml)
         data = self.parse_data(json_str)
+        if data is None:
+            print('{} not exists! Please check the company name!'.format(company))
+            return
 
         print('\n--------------------')
         print ('People: ', data['people'])
@@ -93,9 +98,11 @@ class GithubSpider:
         print ('Projects: ', data['projects'])
         print('--------------------\n')
 
-        self.fetch_repos(company, int(data['repositories']))
+        repo_count = int(data['repositories'])
 
-        self.company_ls.append([company, int(data['repositories'])])
+        self.fetch_repos(company, repo_count)
+
+        self.company_ls.append([company, repo_count])
         self.company_ls.sort(key=lambda x: x[1], reverse=True)
 
         # show the sorted company by repo number
